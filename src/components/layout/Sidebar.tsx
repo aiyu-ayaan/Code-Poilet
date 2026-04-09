@@ -29,8 +29,8 @@ export default function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps)
   const { user, logout } = useApp();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/');
   };
 

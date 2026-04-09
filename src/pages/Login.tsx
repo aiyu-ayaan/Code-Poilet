@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Sparkles } from 'lucide-react';
 import Button from '../components/ui/Button';
@@ -5,12 +6,16 @@ import { useApp } from '../context/AppContext';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, isAuthenticated } = useApp();
+  const { login, isAuthenticated, isBootstrapping } = useApp();
 
-  if (isAuthenticated) {
-    navigate('/dashboard');
-    return null;
-  }
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
+
+  if (isBootstrapping) return null;
+  if (isAuthenticated) return null;
 
   const handleLogin = () => {
     login();

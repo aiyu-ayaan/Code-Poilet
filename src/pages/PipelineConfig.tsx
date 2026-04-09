@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Play, Trash2, Plus, FileText, ArrowLeft, Pencil, Save } from 'lucide-react';
 import { useApp } from '../context/AppContext';
@@ -11,6 +11,15 @@ import Modal from '../components/ui/Modal';
 import type { Workflow, EnvVariable } from '../types';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-yaml';
+import { apiRequest } from '../utils/api';
+
+interface RemoteWorkflow {
+  name: string;
+  fileName: string;
+  path: string;
+  hasWorkflowDispatch: boolean;
+  inputs: string[];
+}
 
 function getStatusBadge(status: Workflow['status']) {
   const variants = {
@@ -43,6 +52,7 @@ export default function PipelineConfig() {
   const { repositories, showToast } = useApp();
 
   const repository = repositories.find((r) => r.id === id);
+  const [workflows, setWorkflows] = useState<Workflow[]>(repository?.workflows ?? []);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(repository?.workflows[0] || null);
   const [isRunModalOpen, setIsRunModalOpen] = useState(false);
   const [envVars, setEnvVars] = useState<EnvVariable[]>([
@@ -54,6 +64,36 @@ export default function PipelineConfig() {
   const [runBranch, setRunBranch] = useState(repository?.defaultBranch ?? 'main');
   const [runEvent, setRunEvent] = useState<'push' | 'workflow_dispatch'>('workflow_dispatch');
   const [runOverride, setRunOverride] = useState('');
+
+  useEffect(() => {
+    if (!repository) return;
+    if (repository.workflows.length > 0) return;
+
+    const loadWorkflows = async () => {
+      try {
+        const payload = await apiRequest<{ workflows: RemoteWorkflow[] }>(`/repos/${repository.owner}/${repository.name}/workflows`);
+        const mapped: Workflow[] = payload.workflows.map((wf, idx) => ({
+          id: `${repository.id}-${idx}`,
+          name: wf.name,
+          fileName: wf.fileName,
+          content: '',
+          status: 'idle',
+          runs: [],
+        }));
+        setWorkflows(mapped);
+        setSelectedWorkflow(mapped[0] ?? null);
+
+        if (mapped[0]) {
+          const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${mapped[0].fileName}/content`);
+          setSelectedWorkflow({ ...mapped[0], content: content.content });
+        }
+      } catch {
+        showToast('warning', 'Could not fetch workflows from backend; showing local data.');
+      }
+    };
+
+    void loadWorkflows();
+  }, [repository, showToast]);
 
   if (!repository) {
     return (
@@ -126,14 +166,22 @@ export default function PipelineConfig() {
                 <p className="text-sm text-[var(--text-secondary)]">.github/workflows/*.yml detected</p>
               </div>
 
-              {repository.workflows.length === 0 ? (
+              {workflows.length === 0 ? (
                 <div className="p-6 text-sm text-[var(--text-secondary)]">No workflows found in this repository.</div>
               ) : (
                 <div className="p-2 space-y-2">
-                  {repository.workflows.map((workflow) => (
+                  {workflows.map((workflow) => (
                     <button
                       key={workflow.id}
-                      onClick={() => setSelectedWorkflow(workflow)}
+                      onClick={async () => {
+                        setSelectedWorkflow(workflow);
+                        try {
+                          const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${workflow.fileName}/content`);
+                          setSelectedWorkflow({ ...workflow, content: content.content });
+                        } catch {
+                          // ignore
+                        }
+                      }}
                       className={`w-full text-left p-3 rounded-lg border transition-all ${
                         selectedWorkflow?.id === workflow.id
                           ? 'bg-[var(--accent-muted)] border-[color:rgb(56_139_253_/_45%)]'
@@ -244,8 +292,32 @@ export default function PipelineConfig() {
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                showToast('success', `Pipeline started on ${runBranch} via ${runEvent}`);
+              onClick={async () => {
+                if (!selectedWorkflow) return;
+                try {
+                  await apiRequest(`/runs/trigger/${repository.owner}/${repository.name}`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      branch: runBranch,
+                      workflowFile: `.github/workflows/${selectedWorkflow.fileName}`,
+                      workflowName: selectedWorkflow.name,
+                      event: runEvent,
+                      envOverrides: Object.fromEntries(
+                        runOverride
+                          .split(/\r?\n/)
+                          .map((line) => line.trim())
+                          .filter(Boolean)
+                          .map((line) => {
+                            const [key, ...rest] = line.split('=');
+                            return [key, rest.join('=')];
+                          })
+                      ),
+                    }),
+                  });
+                  showToast('success', `Pipeline queued on ${runBranch}`);
+                } catch {
+                  showToast('error', 'Failed to queue pipeline');
+                }
                 setIsRunModalOpen(false);
               }}
             >

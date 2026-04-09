@@ -13,8 +13,16 @@ import RunLogs from './pages/RunLogs';
 import Settings from './pages/Settings';
 
 function Layout() {
-  const { isAuthenticated, toasts, removeToast } = useApp();
+  const { isAuthenticated, isBootstrapping, toasts, removeToast } = useApp();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  if (isBootstrapping) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)]">
+        <div className="skeleton h-10 w-56" />
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/" replace />;
