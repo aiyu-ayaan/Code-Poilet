@@ -14,16 +14,18 @@ ActHub is a GitHub Actions-style local CI/CD dashboard powered by `nektos/act`.
 
 Create `.env` from `.env.example` and fill these values:
 
+- `PORT` (default: `8090`)
+- `VITE_API_BASE_URL` (default: `http://localhost:8090/api`)
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
-- `GITHUB_CALLBACK_URL` (default: `http://localhost:8080/api/auth/github/callback`)
+- `GITHUB_CALLBACK_URL` (default: `http://localhost:8090/api/auth/github/callback`)
 - `JWT_SECRET` (min 32 chars)
 - `MONGODB_URI`
 
 ### GitHub OAuth App
 
 - Homepage URL: `http://localhost:5173`
-- Callback URL: `http://localhost:8080/api/auth/github/callback`
+- Callback URL: `http://localhost:8090/api/auth/github/callback`
 
 ## Docker Compose (Recommended)
 

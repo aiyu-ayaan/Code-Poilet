@@ -17,6 +17,8 @@ const envSchema = z.object({
   MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).default(2),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(2500),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).default(24),
+  ENV_ENCRYPTION_KEY: z.string().min(32, 'ENV_ENCRYPTION_KEY must be at least 32 chars'),
+  REDIS_URL: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
