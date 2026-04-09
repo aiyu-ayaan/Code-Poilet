@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+!Dockerfile.local
+runtime/
+backend/dist/
 
 # Editor directories and files
 .vscode/*
