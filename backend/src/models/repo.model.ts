@@ -7,6 +7,7 @@ export interface RepoDocument {
   fullName: string;
   private: boolean;
   defaultBranch: string;
+  githubUpdatedAt?: Date;
   permissions: {
     admin: boolean;
     maintain: boolean;
@@ -26,6 +27,7 @@ const repoSchema = new Schema<RepoDocument>(
     fullName: { type: String, required: true, index: true },
     private: { type: Boolean, required: true },
     defaultBranch: { type: String, required: true },
+    githubUpdatedAt: { type: Date },
     permissions: {
       admin: { type: Boolean, default: false },
       maintain: { type: Boolean, default: false },

@@ -70,6 +70,7 @@ export async function fetchAuthorizedRepos(token: string) {
     fullName: repo.full_name,
     private: repo.private,
     defaultBranch: repo.default_branch,
+    githubUpdatedAt: repo.updated_at ? new Date(repo.updated_at) : undefined,
     permissions: {
       admin: !!repo.permissions?.admin,
       maintain: !!repo.permissions?.maintain,
