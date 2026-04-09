@@ -59,7 +59,18 @@ router.post('/trigger/:owner/:name', async (req: AuthenticatedRequest, res) => {
 
 router.get('/history', async (req, res) => {
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
-  const runs = await RunModel.find({}).sort({ createdAt: -1 }).limit(limit).lean();
+  const repo = typeof req.query.repo === 'string' ? req.query.repo : '';
+  const workflowFile = typeof req.query.workflowFile === 'string' ? req.query.workflowFile : '';
+
+  const query: Record<string, unknown> = {};
+  if (repo) {
+    query.fullRepoName = repo;
+  }
+  if (workflowFile) {
+    query.workflowFile = workflowFile;
+  }
+
+  const runs = await RunModel.find(query).sort({ createdAt: -1 }).limit(limit).lean();
   return res.json(runs);
 });
 

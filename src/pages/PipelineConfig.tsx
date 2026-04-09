@@ -12,6 +12,7 @@ import type { Workflow, EnvVariable } from '../types';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-yaml';
 import { apiRequest } from '../utils/api';
+import { connectLiveSocket } from '../utils/live';
 
 interface RemoteWorkflow {
   name: string;
@@ -19,6 +20,20 @@ interface RemoteWorkflow {
   path: string;
   hasWorkflowDispatch: boolean;
   inputs: string[];
+}
+
+type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+
+interface WorkflowRunRecord {
+  runId: string;
+  workflowName?: string;
+  workflowFile: string;
+  fullRepoName: string;
+  status: RunStatus;
+  durationSeconds?: number;
+  triggeredBy: string;
+  startedAt?: string;
+  queuedAt: string;
 }
 
 function getStatusBadge(status: Workflow['status']) {
@@ -58,6 +73,37 @@ function parseEnvText(text: string): EnvVariable[] {
     .filter((item) => item.key.length > 0);
 }
 
+function formatDuration(seconds?: number): string {
+  if (!seconds) return '-';
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+function formatTimeAgo(dateString?: string) {
+  if (!dateString) return '-';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return date.toLocaleDateString();
+}
+
+function getRunBadge(status: RunStatus) {
+  const variants = {
+    queued: 'warning',
+    running: 'running',
+    success: 'success',
+    failed: 'error',
+    cancelled: 'default',
+  } as const;
+
+  return <Badge variant={variants[status]}>{status}</Badge>;
+}
+
 export default function PipelineConfig() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -75,6 +121,8 @@ export default function PipelineConfig() {
   const [runBranch, setRunBranch] = useState(repository?.defaultBranch ?? 'main');
   const [runEvent, setRunEvent] = useState<'push' | 'workflow_dispatch'>('workflow_dispatch');
   const [runOverride, setRunOverride] = useState('');
+  const [runHistory, setRunHistory] = useState<WorkflowRunRecord[]>([]);
+  const [isRunHistoryLoading, setIsRunHistoryLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadWorkflowContent = useCallback(async (workflow: Workflow) => {
@@ -140,6 +188,63 @@ export default function PipelineConfig() {
 
     void loadWorkflows();
   }, [repository, showToast, loadWorkflowContent]);
+
+  useEffect(() => {
+    if (!repository || !selectedWorkflow) return;
+
+    let isActive = true;
+    const workflowPath = `.github/workflows/${selectedWorkflow.fileName}`;
+
+    const loadRunHistory = async () => {
+      setIsRunHistoryLoading(true);
+      try {
+        const runs = await apiRequest<WorkflowRunRecord[]>(
+          `/runs/history?repo=${encodeURIComponent(repository.fullName)}&workflowFile=${encodeURIComponent(workflowPath)}&limit=20`
+        );
+        if (isActive) {
+          setRunHistory(runs);
+        }
+      } catch {
+        if (isActive) {
+          setRunHistory([]);
+        }
+      } finally {
+        if (isActive) {
+          setIsRunHistoryLoading(false);
+        }
+      }
+    };
+
+    void loadRunHistory();
+
+    const socket = connectLiveSocket((message) => {
+      if (message.type !== 'run_update' || !message.payload) return;
+
+      const payload = message.payload as WorkflowRunRecord;
+      if (payload.fullRepoName !== repository.fullName) return;
+      if (payload.workflowFile !== workflowPath) return;
+
+      setRunHistory((prev) => {
+        const next = [...prev];
+        const existingIndex = next.findIndex((item) => item.runId === payload.runId);
+
+        if (existingIndex >= 0) {
+          next[existingIndex] = payload;
+        } else {
+          next.unshift(payload);
+        }
+
+        return next
+          .sort((a, b) => new Date(b.queuedAt).getTime() - new Date(a.queuedAt).getTime())
+          .slice(0, 20);
+      });
+    });
+
+    return () => {
+      isActive = false;
+      socket.close();
+    };
+  }, [repository, selectedWorkflow]);
 
   if (!repository) {
     return (
@@ -371,6 +476,51 @@ export default function PipelineConfig() {
                           <Input key={inputName} label={inputName} placeholder={`Enter ${inputName}`} />
                         ))}
                       </div>
+                    )}
+                  </div>
+                </Card>
+
+                <Card>
+                  <div className="p-4 border-b border-[var(--border-muted)] flex items-center justify-between">
+                    <div>
+                      <h3 className="font-semibold">Recent Runs</h3>
+                      <p className="text-sm text-[var(--text-secondary)]">Live history for this workflow</p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    {isRunHistoryLoading ? (
+                      <div className="p-4 space-y-2">
+                        {[1, 2, 3].map((row) => (
+                          <div key={row} className="skeleton h-12" />
+                        ))}
+                      </div>
+                    ) : runHistory.length === 0 ? (
+                      <div className="p-6 text-sm text-[var(--text-secondary)]">No runs yet for this workflow.</div>
+                    ) : (
+                      <table className="w-full min-w-[680px]">
+                        <thead>
+                          <tr className="border-b border-[var(--border-muted)]">
+                            <th className="text-left p-4 text-xs uppercase tracking-wide text-[var(--text-tertiary)]">Status</th>
+                            <th className="text-left p-4 text-xs uppercase tracking-wide text-[var(--text-tertiary)]">Triggered By</th>
+                            <th className="text-left p-4 text-xs uppercase tracking-wide text-[var(--text-tertiary)]">Duration</th>
+                            <th className="text-left p-4 text-xs uppercase tracking-wide text-[var(--text-tertiary)]">When</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {runHistory.map((run) => (
+                            <tr
+                              key={run.runId}
+                              className="border-b border-[var(--border-muted)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
+                              onClick={() => navigate(`/runs/${run.runId}`)}
+                            >
+                              <td className="p-4">{getRunBadge(run.status)}</td>
+                              <td className="p-4 text-sm text-[var(--text-primary)]">{run.triggeredBy}</td>
+                              <td className="p-4 text-sm text-[var(--text-secondary)]">{formatDuration(run.durationSeconds)}</td>
+                              <td className="p-4 text-sm text-[var(--text-secondary)]">{formatTimeAgo(run.startedAt || run.queuedAt)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     )}
                   </div>
                 </Card>

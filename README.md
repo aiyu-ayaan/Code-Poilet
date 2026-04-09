@@ -24,6 +24,27 @@ Create `.env` from `.env.example` and fill these values:
 - `ENV_ENCRYPTION_KEY` (min 32 chars)
 - `MONGODB_URI`
 - `REDIS_URL` (optional)
+- `ACT_RUNNER_MODE` (`compose` to use Dockerized act, `binary` to use a local install)
+- `ACT_DOCKER_BINARY` (default: `docker`)
+- `ACT_DOCKER_HOST` (type: `native | wsl`, default: `native`)
+- `ACT_COMPOSE_FILE` (default: `docker-compose.local.yml`)
+- `ACT_COMPOSE_SERVICE` (default: `act-runner`)
+- `ACT_CONTAINER_REPOS_ROOT` (default: `/workspace/runtime/repos`)
+
+### `ACT_DOCKER_HOST` reference
+
+`ACT_DOCKER_HOST` is used when `ACT_RUNNER_MODE=compose`.
+
+Type:
+
+```txt
+native | wsl
+```
+
+Supported values:
+
+- `native`: Runs Docker Compose directly from the host shell (default). Use this when `docker` is installed and available in your host PATH.
+- `wsl`: Runs Docker Compose through WSL. Use this on Windows when Docker is available inside WSL but not available as `docker.exe` in Windows PATH.
 
 ### GitHub OAuth App
 
@@ -34,10 +55,27 @@ Create `.env` from `.env.example` and fill these values:
 
 ### 1) Local development (no Mongo inside compose)
 
-Uses `docker-compose.local.yml` and expects MongoDB to be available externally.
+Uses `docker-compose.local.yml` and expects MongoDB/backend/frontend to be run separately. This file is only for the Dockerized `act` runner.
 
 ```bash
-docker compose -f docker-compose.local.yml up --build
+docker compose -f docker-compose.local.yml up -d --build act-runner
+```
+
+With that running, keep these `.env` values:
+
+```env
+ACT_RUNNER_MODE=compose
+ACT_DOCKER_BINARY=docker
+ACT_DOCKER_HOST=native
+ACT_COMPOSE_FILE=docker-compose.local.yml
+ACT_COMPOSE_SERVICE=act-runner
+ACT_CONTAINER_REPOS_ROOT=/workspace/runtime/repos
+```
+
+If you are on Windows and only have Docker available in WSL, use:
+
+```env
+ACT_DOCKER_HOST=wsl
 ```
 
 ### 2) Full deployment (includes MongoDB)
