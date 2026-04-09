@@ -67,42 +67,53 @@ export async function discoverWorkflows(repoPath: string): Promise<WorkflowDescr
     const workflows: WorkflowDescriptor[] = [];
 
     for (const fileName of targetFiles) {
-      const fullPath = path.join(workflowRoot, fileName);
-      const content = await fs.readFile(fullPath, 'utf8');
-      const parsed = yaml.load(content) as Record<string, unknown> | undefined;
-      const workflowName = typeof parsed?.name === 'string' ? parsed.name : fileName;
-      const onValue = parsed?.on as Record<string, unknown> | string[] | string | undefined;
+      try {
+        const fullPath = path.join(workflowRoot, fileName);
+        const content = await fs.readFile(fullPath, 'utf8');
+        const parsed = yaml.load(content) as Record<string, unknown> | undefined;
+        const workflowName = typeof parsed?.name === 'string' ? parsed.name : fileName;
+        const onValue = parsed?.on as Record<string, unknown> | string[] | string | undefined;
 
-      let hasDispatch = false;
-      let inputs: string[] = [];
+        let hasDispatch = false;
+        let inputs: string[] = [];
 
-      if (typeof onValue === 'object' && onValue !== null && !Array.isArray(onValue)) {
-        if ('workflow_dispatch' in onValue) {
-          hasDispatch = true;
-          const dispatch = onValue.workflow_dispatch;
-          if (typeof dispatch === 'object' && dispatch !== null && 'inputs' in dispatch) {
-            const dispatchInputs = (dispatch as { inputs?: Record<string, unknown> }).inputs;
-            if (dispatchInputs && typeof dispatchInputs === 'object') {
-              inputs = Object.keys(dispatchInputs);
+        if (typeof onValue === 'object' && onValue !== null && !Array.isArray(onValue)) {
+          if ('workflow_dispatch' in onValue) {
+            hasDispatch = true;
+            const dispatch = onValue.workflow_dispatch;
+            if (typeof dispatch === 'object' && dispatch !== null && 'inputs' in dispatch) {
+              const dispatchInputs = (dispatch as { inputs?: Record<string, unknown> }).inputs;
+              if (dispatchInputs && typeof dispatchInputs === 'object') {
+                inputs = Object.keys(dispatchInputs);
+              }
             }
           }
+        } else if (Array.isArray(onValue)) {
+          hasDispatch = onValue.includes('workflow_dispatch');
+        } else if (typeof onValue === 'string') {
+          hasDispatch = onValue === 'workflow_dispatch';
         }
-      } else if (Array.isArray(onValue)) {
-        hasDispatch = onValue.includes('workflow_dispatch');
-      } else if (typeof onValue === 'string') {
-        hasDispatch = onValue === 'workflow_dispatch';
-      }
 
-      workflows.push({
-        name: workflowName,
-        fileName,
-        path: `.github/workflows/${fileName}`,
-        hasWorkflowDispatch: hasDispatch,
-        inputs,
-      });
+        workflows.push({
+          name: workflowName,
+          fileName,
+          path: `.github/workflows/${fileName}`,
+          hasWorkflowDispatch: hasDispatch,
+          inputs,
+        });
+      } catch (error) {
+        logger.warn({ err: error, fileName, repoPath }, 'Could not fully parse workflow file, using fallback metadata');
+        workflows.push({
+          name: fileName,
+          fileName,
+          path: `.github/workflows/${fileName}`,
+          hasWorkflowDispatch: false,
+          inputs: [],
+        });
+      }
     }
 
-    return workflows;
+    return workflows.sort((left, right) => left.fileName.localeCompare(right.fileName));
   } catch {
     return [];
   }

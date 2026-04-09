@@ -1,6 +1,6 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Trash2, Plus, FileText, ArrowLeft, Pencil, Upload, Download, Save } from 'lucide-react';
+import { Play, Trash2, Plus, FileText, ArrowLeft, Pencil, Upload, Download, Save, RefreshCcw, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Header from '../components/layout/Header';
 import Button from '../components/ui/Button';
@@ -113,8 +113,10 @@ export default function PipelineConfig() {
   const [workflows, setWorkflows] = useState<Workflow[]>(repository?.workflows ?? []);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(repository?.workflows[0] || null);
   const [isRunModalOpen, setIsRunModalOpen] = useState(false);
+  const [isWorkflowListLoading, setIsWorkflowListLoading] = useState(false);
   const [isYamlLoading, setIsYamlLoading] = useState(false);
   const [yamlProgress, setYamlProgress] = useState(0);
+  const [workflowLoadError, setWorkflowLoadError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvVariable[]>([]);
   const [newVar, setNewVar] = useState({ key: '', value: '' });
   const [editIndex, setEditIndex] = useState<number | null>(null);
@@ -124,13 +126,16 @@ export default function PipelineConfig() {
   const [runHistory, setRunHistory] = useState<WorkflowRunRecord[]>([]);
   const [isRunHistoryLoading, setIsRunHistoryLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedWorkflowFileRef = useRef<string | null>(repository?.workflows[0]?.fileName ?? null);
 
   const loadWorkflowContent = useCallback(async (workflow: Workflow) => {
     if (!repository) return;
 
+    selectedWorkflowFileRef.current = workflow.fileName;
     setSelectedWorkflow(workflow);
     setIsYamlLoading(true);
     setYamlProgress(8);
+    setWorkflowLoadError(null);
 
     const timer = setInterval(() => {
       setYamlProgress((prev) => (prev >= 90 ? prev : prev + 8));
@@ -140,14 +145,20 @@ export default function PipelineConfig() {
       const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${workflow.fileName}/content`);
       setSelectedWorkflow({ ...workflow, content: content.content });
       setYamlProgress(100);
+    } catch {
+      setWorkflowLoadError(`We couldn't load ${workflow.fileName} from the backend. Try refreshing workflows or re-opening the repository.`);
+      setSelectedWorkflow({ ...workflow, content: '# Workflow content could not be loaded from the backend.\n# Refresh the workflow list and try again.' });
+      showToast('warning', 'Could not load workflow YAML from backend.');
+    }
 
+    try {
       const profile = await apiRequest<{ vars: Record<string, string>; exists: boolean }>(
         `/repos/${repository.owner}/${repository.name}/env-profile?workflowFile=${encodeURIComponent(`.github/workflows/${workflow.fileName}`)}`
       );
       const loadedVars = Object.entries(profile.vars).map(([key, value]) => ({ key, value }));
       setEnvVars(loadedVars);
     } catch {
-      showToast('warning', 'Could not load workflow YAML from backend.');
+      setEnvVars([]);
     } finally {
       clearInterval(timer);
       setTimeout(() => {
@@ -157,37 +168,54 @@ export default function PipelineConfig() {
     }
   }, [repository, showToast]);
 
-  useEffect(() => {
+  const loadWorkflows = useCallback(async () => {
     if (!repository) return;
 
-    const loadWorkflows = async () => {
-      try {
-        const payload = await apiRequest<{ workflows: RemoteWorkflow[] }>(`/repos/${repository.owner}/${repository.name}/workflows`);
-        const mapped: Workflow[] = payload.workflows.map((wf, idx) => ({
-          id: `${repository.id}-${idx}`,
-          name: wf.name,
-          fileName: wf.fileName,
-          content: '',
-          status: 'idle',
-          runs: [],
-        }));
-        setWorkflows(mapped);
+    setIsWorkflowListLoading(true);
+    setWorkflowLoadError(null);
 
-        if (mapped[0]) {
-          await loadWorkflowContent(mapped[0]);
-        }
-      } catch {
-        if (repository.workflows.length > 0) {
-          setWorkflows(repository.workflows);
-          setSelectedWorkflow(repository.workflows[0] ?? null);
-        } else {
-          showToast('warning', 'Could not fetch workflows from backend.');
-        }
+    try {
+      const payload = await apiRequest<{ workflows: RemoteWorkflow[] }>(`/repos/${repository.owner}/${repository.name}/workflows`);
+      const mapped: Workflow[] = payload.workflows.map((wf, idx) => ({
+        id: `${repository.id}-${idx}`,
+        name: wf.name,
+        fileName: wf.fileName,
+        content: '',
+        status: 'idle',
+        runs: [],
+      }));
+      setWorkflows(mapped);
+
+      if (mapped[0]) {
+        const preferredWorkflow =
+          selectedWorkflowFileRef.current && mapped.some((item) => item.fileName === selectedWorkflowFileRef.current)
+            ? mapped.find((item) => item.fileName === selectedWorkflowFileRef.current) || mapped[0]
+            : mapped[0];
+        await loadWorkflowContent(preferredWorkflow);
+      } else {
+        setSelectedWorkflow(null);
+        setEnvVars([]);
       }
-    };
+    } catch {
+      if (repository.workflows.length > 0) {
+        setWorkflows(repository.workflows);
+        setSelectedWorkflow(repository.workflows[0] ?? null);
+        setWorkflowLoadError('Backend workflow discovery is unavailable right now. Showing cached workflow metadata only.');
+      } else {
+        setWorkflows([]);
+        setSelectedWorkflow(null);
+        setWorkflowLoadError(`We couldn't discover workflow files for ${repository.fullName}. Make sure the repo is synced and contains .github/workflows/*.yml files.`);
+        showToast('warning', 'Could not fetch workflows from backend.');
+      }
+    } finally {
+      setIsWorkflowListLoading(false);
+    }
+  }, [loadWorkflowContent, repository, showToast]);
 
+  useEffect(() => {
+    if (!repository) return;
     void loadWorkflows();
-  }, [repository, showToast, loadWorkflowContent]);
+  }, [repository, loadWorkflows]);
 
   useEffect(() => {
     if (!repository || !selectedWorkflow) return;
@@ -345,12 +373,33 @@ export default function PipelineConfig() {
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 md:gap-6">
           <div className="xl:col-span-4">
             <Card className="h-full">
-              <div className="p-4 border-b border-[var(--border-muted)]">
-                <h3 className="font-semibold">Workflow Files</h3>
-                <p className="text-sm text-[var(--text-secondary)]">.github/workflows/*.yml detected</p>
+              <div className="p-4 border-b border-[var(--border-muted)] flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">Workflow Files</h3>
+                  <p className="text-sm text-[var(--text-secondary)]">.github/workflows/*.yml detected</p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => void loadWorkflows()} isLoading={isWorkflowListLoading}>
+                  <RefreshCcw size={14} className="mr-1.5" />
+                  Refresh
+                </Button>
               </div>
 
-              {workflows.length === 0 ? (
+              {workflowLoadError && (
+                <div className="mx-3 mt-3 rounded-lg border border-[color:rgb(210_153_34_/_35%)] bg-[color:rgb(210_153_34_/_10%)] p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={16} className="mt-0.5 text-[var(--warning)] shrink-0" />
+                    <p className="text-sm text-[var(--text-secondary)]">{workflowLoadError}</p>
+                  </div>
+                </div>
+              )}
+
+              {isWorkflowListLoading ? (
+                <div className="p-3 space-y-2">
+                  {[1, 2, 3].map((row) => (
+                    <div key={row} className="skeleton h-20 rounded-lg" />
+                  ))}
+                </div>
+              ) : workflows.length === 0 ? (
                 <div className="p-6 text-sm text-[var(--text-secondary)]">No workflows found in this repository.</div>
               ) : (
                 <div className="p-2 space-y-2">
@@ -382,7 +431,19 @@ export default function PipelineConfig() {
           </div>
 
           <div className="xl:col-span-8 space-y-4 md:space-y-6">
-            {selectedWorkflow ? (
+            {isWorkflowListLoading && !selectedWorkflow ? (
+              <>
+                <Card className="p-4 space-y-3">
+                  <div className="skeleton h-6 w-48" />
+                  <div className="skeleton h-72" />
+                </Card>
+                <Card className="p-4 space-y-3">
+                  <div className="skeleton h-6 w-56" />
+                  <div className="skeleton h-14" />
+                  <div className="skeleton h-14" />
+                </Card>
+              </>
+            ) : selectedWorkflow ? (
               <>
                 <Card>
                   <div className="p-4 border-b border-[var(--border-muted)] flex items-center justify-between">
@@ -546,6 +607,7 @@ export default function PipelineConfig() {
               onClick={async () => {
                 if (!selectedWorkflow) return;
                 try {
+                  const overrideVars = Object.fromEntries(parseEnvText(runOverride).map((item) => [item.key, item.value]));
                   await apiRequest(`/runs/trigger/${repository.owner}/${repository.name}`, {
                     method: 'POST',
                     body: JSON.stringify({
@@ -553,7 +615,10 @@ export default function PipelineConfig() {
                       workflowFile: `.github/workflows/${selectedWorkflow.fileName}`,
                       workflowName: selectedWorkflow.name,
                       event: runEvent,
-                      envOverrides: Object.fromEntries(envVars.map((item) => [item.key, item.value])),
+                      envOverrides: {
+                        ...Object.fromEntries(envVars.map((item) => [item.key, item.value])),
+                        ...overrideVars,
+                      },
                     }),
                   });
                   showToast('success', `Pipeline queued on ${runBranch}`);
