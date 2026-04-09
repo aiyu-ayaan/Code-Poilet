@@ -11,4 +11,12 @@ services:
     volumes:
       - .:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
+      - act_runner_cache:/root/.cache/act
+      - act_runner_config:/root/.config/act
+      - act_runner_toolcache:/opt/hostedtoolcache
     restart: "no"
+
+volumes:
+  act_runner_cache:
+  act_runner_config:
+  act_runner_toolcache:

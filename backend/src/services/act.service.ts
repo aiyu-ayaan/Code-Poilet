@@ -179,6 +179,8 @@ function buildComposeActCommand(options: ActRunOptions, args: string[]): SpawnSp
       envVars: {
         ...process.env,
         COMPOSE_DISABLE_ENV_FILE: '1',
+        COMPOSE_IGNORE_ORPHANS: '1',
+        COMPOSE_PROJECT_NAME: 'acthub-runner',
       } as Record<string, string>,
     };
   }
@@ -190,6 +192,8 @@ function buildComposeActCommand(options: ActRunOptions, args: string[]): SpawnSp
     envVars: {
       ...process.env,
       COMPOSE_DISABLE_ENV_FILE: '1',
+      COMPOSE_IGNORE_ORPHANS: '1',
+      COMPOSE_PROJECT_NAME: 'acthub-runner',
     } as Record<string, string>,
   };
 }
@@ -248,6 +252,8 @@ export async function runAct(options: ActRunOptions) {
     '--container-architecture',
     'linux/amd64',
     '--pull=false',
+    ...(env.ACT_OFFLINE_MODE ? ['--action-offline-mode'] : []),
+    ...(env.ACT_REUSE_CONTAINERS ? ['--reuse'] : []),
   ];
 
   const spawnSpec = buildActSpawnSpec(options, args);

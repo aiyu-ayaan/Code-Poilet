@@ -20,6 +20,8 @@ const envSchema = z.object({
   ACT_COMPOSE_FILE: z.string().default('docker-compose.local.yml'),
   ACT_COMPOSE_SERVICE: z.string().default('act-runner'),
   ACT_CONTAINER_REPOS_ROOT: z.string().default('/workspace/runtime/repos'),
+  ACT_REUSE_CONTAINERS: z.coerce.boolean().default(true),
+  ACT_OFFLINE_MODE: z.coerce.boolean().default(true),
   MAX_CONCURRENT_RUNS: z.coerce.number().int().min(1).default(2),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(2500),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).default(24),
