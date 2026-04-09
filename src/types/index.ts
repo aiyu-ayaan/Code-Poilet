@@ -60,3 +60,13 @@ export interface EnvVariable {
   value: string;
   isSecret?: boolean;
 }
+
+export interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  type: 'success' | 'error' | 'warning' | 'info';
+  createdAt: string;
+  isRead: boolean;
+  href?: string;
+}

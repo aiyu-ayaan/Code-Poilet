@@ -1,8 +1,9 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import type { User, Repository, ToastProps } from '../types';
+import type { User, Repository, ToastProps, NotificationItem } from '../types';
 import { mockRepositories } from '../data/mockData';
 import { apiRequest, getApiBaseUrl } from '../utils/api';
+import { connectLiveSocket, type LiveMessage } from '../utils/live';
 
 interface AppContextType {
   user: User | null;
@@ -10,6 +11,8 @@ interface AppContextType {
   repositories: Repository[];
   selectedRepo: Repository | null;
   toasts: ToastProps[];
+  notifications: NotificationItem[];
+  unreadNotifications: number;
   isBootstrapping: boolean;
   login: () => void;
   logout: () => Promise<void>;
@@ -18,6 +21,8 @@ interface AppContextType {
   refreshRepositories: (forceSync?: boolean) => Promise<void>;
   showToast: (type: ToastProps['type'], message: string) => void;
   removeToast: (id: string) => void;
+  markNotificationsRead: () => void;
+  dismissNotification: (id: string) => void;
 }
 
 interface BackendMe {
@@ -37,9 +42,19 @@ interface BackendRepo {
   lastRunAt?: string;
 }
 
+interface LiveRunPayload {
+  runId: string;
+  fullRepoName: string;
+  workflowName?: string;
+  workflowFile: string;
+  status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+  branch: string;
+}
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const repoCacheKey = 'acthub:repos';
+const maxNotifications = 20;
 
 function mapStatus(status?: BackendRepo['status']): Repository['status'] {
   if (status === 'queued') return 'running';
@@ -75,6 +90,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [toasts, setToasts] = useState<ToastProps[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
 
   const showToast = useCallback((type: ToastProps['type'], message: string) => {
@@ -84,6 +100,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const markNotificationsRead = useCallback(() => {
+    setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+  }, []);
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
   const refreshRepositories = useCallback(async (forceSync = true) => {
@@ -127,6 +151,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      return;
+    }
+
+    const createNotification = (message: LiveMessage) => {
+      if (message.type !== 'run_update' || !message.payload || message.event === 'log' || message.event === 'snapshot') {
+        return;
+      }
+
+      const payload = message.payload as LiveRunPayload;
+      const workflowLabel = payload.workflowName || payload.workflowFile.split('/').pop() || 'workflow';
+      const titleMap = {
+        queued: 'Run queued',
+        running: 'Run started',
+        success: 'Run completed',
+        failed: 'Run failed',
+        cancelled: 'Run cancelled',
+      } as const;
+      const typeMap = {
+        queued: 'info',
+        running: 'info',
+        success: 'success',
+        failed: 'error',
+        cancelled: 'warning',
+      } as const;
+
+      const notification: NotificationItem = {
+        id: `${payload.runId}:${message.event || payload.status}`,
+        title: titleMap[payload.status],
+        message: `${workflowLabel} on ${payload.fullRepoName} (${payload.branch})`,
+        type: typeMap[payload.status],
+        createdAt: new Date().toISOString(),
+        isRead: false,
+        href: `/runs/${payload.runId}`,
+      };
+
+      setNotifications((prev) => {
+        const next = [notification, ...prev.filter((item) => item.id !== notification.id)];
+        return next.slice(0, maxNotifications);
+      });
+
+      if (payload.status === 'failed') {
+        showToast('error', `${workflowLabel} failed on ${payload.fullRepoName}`);
+      } else if (payload.status === 'success') {
+        showToast('success', `${workflowLabel} completed on ${payload.fullRepoName}`);
+      }
+    };
+
+    const socket = connectLiveSocket(createNotification);
+    return () => socket.close();
+  }, [showToast, user]);
+
+  useEffect(() => {
     const bootstrap = async () => {
       try {
         const me = await apiRequest<BackendMe>('/auth/me');
@@ -154,6 +232,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repositories,
     selectedRepo,
     toasts,
+    notifications,
+    unreadNotifications: notifications.filter((item) => !item.isRead).length,
     isBootstrapping,
     login,
     logout,
@@ -162,6 +242,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshRepositories,
     showToast,
     removeToast,
+    markNotificationsRead,
+    dismissNotification,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
