@@ -1,90 +1,155 @@
-# ActHub (Frontend + Backend)
+# CodePilot
 
-ActHub is a GitHub Actions-style local CI/CD dashboard powered by `nektos/act`.
+CodePilot is a local-first CI/CD dashboard inspired by GitHub Actions and powered by `nektos/act`.
 
-## Stack
+> Status: `In Development`
+>  
+> The product is actively evolving. Expect fast iteration, UI improvements, and backend feature updates.
 
-- Frontend: React + Vite (`src/`)
-- Backend API: Express + MongoDB (`backend/src/`)
-- Auth: GitHub OAuth with repo-layer permissions
-- Runner: Background queue worker with concurrency limits and dedupe
-- Live updates: WebSocket stream for queue and run logs/status
-- Cache: Redis (optional) with in-memory fallback
+## What It Does
 
-## Environment
+- GitHub OAuth login with repo-layer permissions
+- Sync and manage repositories from your GitHub account
+- Discover workflow files from `.github/workflows/*.yml`
+- Trigger local pipeline runs via `act`
+- Live queue + run updates through WebSockets
+- Stream run logs in near real time
+- Save encrypted workflow environment profiles in MongoDB
+- Optional Redis cache with memory fallback
 
-Create `.env` from `.env.example` and fill these values:
+## Tech Stack
 
-- `PORT` (default: `8090`)
-- `VITE_API_PROXY_TARGET` (default: `http://localhost:8090`)
-- `GITHUB_CLIENT_ID`
-- `GITHUB_CLIENT_SECRET`
-- `GITHUB_CALLBACK_URL` (default: `http://localhost:8090/api/auth/github/callback`)
-- `JWT_SECRET` (min 32 chars)
-- `ENV_ENCRYPTION_KEY` (min 32 chars)
-- `MONGODB_URI`
-- `REDIS_URL` (optional)
-- `ACT_RUNNER_MODE` (`compose` to use Dockerized act, `binary` to use a local install)
-- `ACT_DOCKER_BINARY` (default: `docker`)
-- `ACT_DOCKER_HOST` (type: `native | wsl`, default: `native`)
-- `ACT_COMPOSE_FILE` (default: `docker-compose.local.yml`)
-- `ACT_COMPOSE_SERVICE` (default: `act-runner`)
-- `ACT_CONTAINER_REPOS_ROOT` (default: `/workspace/runtime/repos`)
+- Frontend: React + Vite + TypeScript (`src/`)
+- Backend: Express + TypeScript (`backend/src/`)
+- Database: MongoDB
+- Cache: Redis (optional)
+- Runner: `nektos/act` (binary or Docker Compose mode)
+- Live transport: WebSocket (`/live`)
 
-### `ACT_DOCKER_HOST` reference
+## Screenshots
 
-`ACT_DOCKER_HOST` is used when `ACT_RUNNER_MODE=compose`.
+![Dashboard](pictures/Dashboard.png)
+![Repositories](pictures/Repositories.png)
+![Run History Summary](pictures/Run%20History%20Summary.png)
 
-Type:
+## Prerequisites
 
-```txt
-native | wsl
-```
+- Node.js 20+
+- npm 10+
+- Git
+- Docker Desktop (recommended for `act` runner mode)
+- MongoDB instance (local or hosted)
+- Redis (optional)
 
-Supported values:
-
-- `native`: Runs Docker Compose directly from the host shell (default). Use this when `docker` is installed and available in your host PATH.
-- `wsl`: Runs Docker Compose through WSL. Use this on Windows when Docker is available inside WSL but not available as `docker.exe` in Windows PATH.
-
-### GitHub OAuth App
-
-- Homepage URL: `http://localhost:5173`
-- Callback URL: `http://localhost:8090/api/auth/github/callback`
-
-## Docker Compose (Recommended)
-
-### 1) Local development (no Mongo inside compose)
-
-Uses `docker-compose.local.yml` and expects MongoDB/backend/frontend to be run separately. This file is only for the Dockerized `act` runner.
+## 1) Clone + Install
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build act-runner
+git clone <your-repo-url>
+cd code-pilot
+npm install
 ```
 
-With that running, keep these `.env` values:
+## 2) Configure Environment
+
+Copy `.env.example` to `.env` and set values:
 
 ```env
+NODE_ENV=development
+PORT=8090
+APP_ORIGIN=http://localhost:5173
+VITE_API_PROXY_TARGET=http://localhost:8090
+
+MONGODB_URI=mongodb://localhost:27017/acthub
+REDIS_URL=redis://localhost:6379
+
+JWT_SECRET=replace-with-a-very-long-random-string-min-32-chars
+ENV_ENCRYPTION_KEY=replace-with-another-long-random-string-min-32-chars
+
+GITHUB_CLIENT_ID=your-github-oauth-client-id
+GITHUB_CLIENT_SECRET=your-github-oauth-client-secret
+GITHUB_CALLBACK_URL=http://localhost:8090/api/auth/github/callback
+
+REPOS_ROOT=./runtime/repos
 ACT_RUNNER_MODE=compose
+ACT_BINARY=act
 ACT_DOCKER_BINARY=docker
 ACT_DOCKER_HOST=native
 ACT_COMPOSE_FILE=docker-compose.local.yml
 ACT_COMPOSE_SERVICE=act-runner
 ACT_CONTAINER_REPOS_ROOT=/workspace/runtime/repos
+ACT_REUSE_CONTAINERS=true
+ACT_OFFLINE_MODE=true
+
+MAX_CONCURRENT_RUNS=2
+WORKER_POLL_INTERVAL_MS=2500
+SESSION_TTL_HOURS=24
 ```
 
-If you are on Windows and only have Docker available in WSL, use:
+## 3) Create GitHub OAuth App
+
+In GitHub Developer Settings:
+
+1. Set `Homepage URL` to `http://localhost:5173`
+2. Set `Authorization callback URL` to `http://localhost:8090/api/auth/github/callback`
+3. Copy client ID and client secret into `.env`
+
+## 4) Start Services (Development)
+
+Run the Dockerized `act` runner:
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build act-runner
+```
+
+Start backend:
+
+```bash
+npm run dev:backend
+```
+
+Start frontend:
+
+```bash
+npm run dev
+```
+
+Open app:
+
+- `http://localhost:5173`
+
+## Windows + WSL Note
+
+If Docker is only available inside WSL, set:
 
 ```env
 ACT_DOCKER_HOST=wsl
 ```
 
-### 2) Full deployment (includes MongoDB)
+Otherwise keep:
+
+```env
+ACT_DOCKER_HOST=native
+```
+
+## Full Deployment via Docker Compose
+
+`docker-compose.yml` includes app services with MongoDB for a full stack deployment:
 
 ```bash
 docker compose up --build -d
 ```
 
-## API Endpoints
+## Scripts
+
+- `npm run dev` - frontend (Vite)
+- `npm run dev:backend` - backend in watch mode
+- `npm run dev:full` - frontend + backend together
+- `npm run build` - frontend production build
+- `npm run build:backend` - backend TypeScript build
+- `npm run start:backend` - run built backend
+- `npm run lint` - lint codebase
+
+## Core API Routes
 
 - `GET /api/auth/github/start`
 - `GET /api/auth/github/callback`
@@ -101,19 +166,15 @@ docker compose up --build -d
 - `GET /api/runs/:runId`
 - `GET /api/runs/status/queue`
 
-## Non-Docker local run
-
-```bash
-npm install
-npm run dev
-npm run dev:backend
-```
-
 ## Reliability Features
 
-- Queue dedupe for same repo + workflow + branch
-- Background worker with `MAX_CONCURRENT_RUNS`
-- Repo permission checks before triggering pipelines
-- Real-time log streaming over WebSockets
+- Background queue worker with concurrency control
+- Run dedupe (same repo + workflow + branch)
+- Repo permission check before run trigger
+- WebSocket-based live updates for queue + runs
 - Encrypted env profile storage per workflow
-- Repositories cached with Redis/in-memory fallback
+- Redis caching with in-memory fallback
+
+## License
+
+No license file is currently defined.
