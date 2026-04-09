@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -23,5 +23,8 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 }
 
 export function getApiBaseUrl() {
+  if (API_BASE.startsWith('/')) {
+    return `${window.location.origin}${API_BASE}`;
+  }
   return API_BASE;
 }

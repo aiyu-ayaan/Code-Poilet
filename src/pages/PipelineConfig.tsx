@@ -1,6 +1,6 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Trash2, Plus, FileText, ArrowLeft, Pencil, Save } from 'lucide-react';
+import { Play, Trash2, Plus, FileText, ArrowLeft, Pencil, Upload, Download, Save } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Header from '../components/layout/Header';
 import Button from '../components/ui/Button';
@@ -46,6 +46,18 @@ function detectWorkflowInputs(content: string): string[] {
   return [...new Set(inputNames)];
 }
 
+function parseEnvText(text: string): EnvVariable[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.includes('='))
+    .map((line) => {
+      const [key, ...rest] = line.split('=');
+      return { key: key.trim(), value: rest.join('=').trim() };
+    })
+    .filter((item) => item.key.length > 0);
+}
+
 export default function PipelineConfig() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -55,19 +67,50 @@ export default function PipelineConfig() {
   const [workflows, setWorkflows] = useState<Workflow[]>(repository?.workflows ?? []);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(repository?.workflows[0] || null);
   const [isRunModalOpen, setIsRunModalOpen] = useState(false);
-  const [envVars, setEnvVars] = useState<EnvVariable[]>([
-    { key: 'NODE_VERSION', value: '20.x' },
-    { key: 'ACT_CACHE_DIR', value: '.act-cache' },
-  ]);
+  const [isYamlLoading, setIsYamlLoading] = useState(false);
+  const [yamlProgress, setYamlProgress] = useState(0);
+  const [envVars, setEnvVars] = useState<EnvVariable[]>([]);
   const [newVar, setNewVar] = useState({ key: '', value: '' });
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [runBranch, setRunBranch] = useState(repository?.defaultBranch ?? 'main');
   const [runEvent, setRunEvent] = useState<'push' | 'workflow_dispatch'>('workflow_dispatch');
   const [runOverride, setRunOverride] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadWorkflowContent = useCallback(async (workflow: Workflow) => {
+    if (!repository) return;
+
+    setSelectedWorkflow(workflow);
+    setIsYamlLoading(true);
+    setYamlProgress(8);
+
+    const timer = setInterval(() => {
+      setYamlProgress((prev) => (prev >= 90 ? prev : prev + 8));
+    }, 90);
+
+    try {
+      const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${workflow.fileName}/content`);
+      setSelectedWorkflow({ ...workflow, content: content.content });
+      setYamlProgress(100);
+
+      const profile = await apiRequest<{ vars: Record<string, string>; exists: boolean }>(
+        `/repos/${repository.owner}/${repository.name}/env-profile?workflowFile=${encodeURIComponent(`.github/workflows/${workflow.fileName}`)}`
+      );
+      const loadedVars = Object.entries(profile.vars).map(([key, value]) => ({ key, value }));
+      setEnvVars(loadedVars);
+    } catch {
+      showToast('warning', 'Could not load workflow YAML from backend.');
+    } finally {
+      clearInterval(timer);
+      setTimeout(() => {
+        setIsYamlLoading(false);
+        setYamlProgress(0);
+      }, 250);
+    }
+  }, [repository, showToast]);
 
   useEffect(() => {
     if (!repository) return;
-    if (repository.workflows.length > 0) return;
 
     const loadWorkflows = async () => {
       try {
@@ -81,19 +124,22 @@ export default function PipelineConfig() {
           runs: [],
         }));
         setWorkflows(mapped);
-        setSelectedWorkflow(mapped[0] ?? null);
 
         if (mapped[0]) {
-          const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${mapped[0].fileName}/content`);
-          setSelectedWorkflow({ ...mapped[0], content: content.content });
+          await loadWorkflowContent(mapped[0]);
         }
       } catch {
-        showToast('warning', 'Could not fetch workflows from backend; showing local data.');
+        if (repository.workflows.length > 0) {
+          setWorkflows(repository.workflows);
+          setSelectedWorkflow(repository.workflows[0] ?? null);
+        } else {
+          showToast('warning', 'Could not fetch workflows from backend.');
+        }
       }
     };
 
     void loadWorkflows();
-  }, [repository, showToast]);
+  }, [repository, showToast, loadWorkflowContent]);
 
   if (!repository) {
     return (
@@ -112,10 +158,7 @@ export default function PipelineConfig() {
     );
   }
 
-  const selectedInputs = useMemo(() => {
-    if (!selectedWorkflow) return [];
-    return detectWorkflowInputs(selectedWorkflow.content);
-  }, [selectedWorkflow]);
+  const selectedInputs = selectedWorkflow ? detectWorkflowInputs(selectedWorkflow.content) : [];
 
   const handleAddEnvVar = () => {
     if (!newVar.key || !newVar.value) return;
@@ -138,6 +181,42 @@ export default function PipelineConfig() {
   const handleDeleteEnvVar = (index: number) => {
     setEnvVars(envVars.filter((_, i) => i !== index));
     showToast('success', 'Environment variable removed');
+  };
+
+  const saveEncryptedEnv = async () => {
+    if (!selectedWorkflow) return;
+    try {
+      await apiRequest(`/repos/${repository.owner}/${repository.name}/env-profile`, {
+        method: 'POST',
+        body: JSON.stringify({
+          workflowFile: `.github/workflows/${selectedWorkflow.fileName}`,
+          vars: Object.fromEntries(envVars.map((item) => [item.key, item.value])),
+        }),
+      });
+      showToast('success', 'Encrypted env profile saved');
+    } catch {
+      showToast('error', 'Could not save env profile');
+    }
+  };
+
+  const handleDownloadEnv = () => {
+    const content = envVars.map((item) => `${item.key}=${item.value}`).join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${repository.name}-${selectedWorkflow?.fileName || 'workflow'}.env`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUploadEnv = async (file: File) => {
+    const text = await file.text();
+    const parsed = parseEnvText(text);
+    setEnvVars(parsed);
+    showToast('success', 'Env file imported');
   };
 
   const highlightedCode = selectedWorkflow?.content
@@ -173,15 +252,7 @@ export default function PipelineConfig() {
                   {workflows.map((workflow) => (
                     <button
                       key={workflow.id}
-                      onClick={async () => {
-                        setSelectedWorkflow(workflow);
-                        try {
-                          const content = await apiRequest<{ content: string }>(`/repos/${repository.owner}/${repository.name}/workflows/${workflow.fileName}/content`);
-                          setSelectedWorkflow({ ...workflow, content: content.content });
-                        } catch {
-                          // ignore
-                        }
-                      }}
+                      onClick={() => void loadWorkflowContent(workflow)}
                       className={`w-full text-left p-3 rounded-lg border transition-all ${
                         selectedWorkflow?.id === workflow.id
                           ? 'bg-[var(--accent-muted)] border-[color:rgb(56_139_253_/_45%)]'
@@ -214,20 +285,50 @@ export default function PipelineConfig() {
                       <h3 className="font-semibold">{selectedWorkflow.fileName}</h3>
                       <p className="text-sm text-[var(--text-secondary)]">Read-only YAML preview</p>
                     </div>
-                    <Button variant="secondary" size="sm">
-                      <Save size={14} className="mr-1.5" />
-                      Save Draft
-                    </Button>
                   </div>
+                  {isYamlLoading && (
+                    <div className="h-1 bg-[var(--bg-tertiary)]">
+                      <div className="h-1 bg-[var(--accent-primary)] transition-all duration-150" style={{ width: `${yamlProgress}%` }} />
+                    </div>
+                  )}
                   <pre className="p-4 overflow-auto max-h-[340px] text-sm bg-[var(--bg-primary)] border-t border-[var(--border-muted)]">
                     <code className="language-yaml" dangerouslySetInnerHTML={{ __html: highlightedCode }} />
                   </pre>
                 </Card>
 
                 <Card>
-                  <div className="p-4 border-b border-[var(--border-muted)]">
-                    <h3 className="font-semibold">Environment Variables</h3>
-                    <p className="text-sm text-[var(--text-secondary)]">Configure key/value pairs for local run context.</p>
+                  <div className="p-4 border-b border-[var(--border-muted)] flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <h3 className="font-semibold">Environment Variables</h3>
+                      <p className="text-sm text-[var(--text-secondary)]">Configure key/value pairs for local run context.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".env,.txt"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) {
+                            void handleUploadEnv(file);
+                          }
+                          event.currentTarget.value = '';
+                        }}
+                      />
+                      <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}>
+                        <Upload size={14} className="mr-1.5" />
+                        Upload .env
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={handleDownloadEnv}>
+                        <Download size={14} className="mr-1.5" />
+                        Download .env
+                      </Button>
+                      <Button size="sm" onClick={() => void saveEncryptedEnv()}>
+                        <Save size={14} className="mr-1.5" />
+                        Save Encrypted
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="p-4 space-y-3">
@@ -302,16 +403,7 @@ export default function PipelineConfig() {
                       workflowFile: `.github/workflows/${selectedWorkflow.fileName}`,
                       workflowName: selectedWorkflow.name,
                       event: runEvent,
-                      envOverrides: Object.fromEntries(
-                        runOverride
-                          .split(/\r?\n/)
-                          .map((line) => line.trim())
-                          .filter(Boolean)
-                          .map((line) => {
-                            const [key, ...rest] = line.split('=');
-                            return [key, rest.join('=')];
-                          })
-                      ),
+                      envOverrides: Object.fromEntries(envVars.map((item) => [item.key, item.value])),
                     }),
                   });
                   showToast('success', `Pipeline queued on ${runBranch}`);

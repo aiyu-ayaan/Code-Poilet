@@ -10,6 +10,7 @@ import {
   Boxes,
   DatabaseZap,
   Filter,
+  RefreshCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Header from '../components/layout/Header';
@@ -17,8 +18,18 @@ import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import type { Repository } from '../types';
+import { connectLiveSocket } from '../utils/live';
+import { apiRequest } from '../utils/api';
 
 type RepoFilter = 'all' | Repository['status'];
+
+interface QueueSnapshot {
+  queued: number;
+  running: number;
+  failed: number;
+  success: number;
+  maxConcurrentRuns?: number;
+}
 
 function formatTimeAgo(dateString?: string): string {
   if (!dateString) return 'Never';
@@ -53,14 +64,28 @@ function getStatusBadge(status: Repository['status']) {
 
 export default function Repositories() {
   const navigate = useNavigate();
-  const { repositories, selectRepo, showToast } = useApp();
+  const { repositories, selectRepo, showToast, refreshRepositories } = useApp();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<RepoFilter>('all');
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [queue, setQueue] = useState<QueueSnapshot | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setIsLoading(false), 700);
     return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    apiRequest<QueueSnapshot>('/runs/status/queue').then(setQueue).catch(() => setQueue(null));
+
+    const socket = connectLiveSocket((message) => {
+      if (message.type === 'queue_snapshot' && message.payload) {
+        setQueue(message.payload as QueueSnapshot);
+      }
+    });
+
+    return () => socket.close();
   }, []);
 
   const filteredRepositories = useMemo(() => {
@@ -84,16 +109,34 @@ export default function Repositories() {
     showToast('success', `Started pipeline for ${repo.name}`);
   };
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshRepositories(true);
+      showToast('success', 'Repositories refreshed');
+    } catch {
+      showToast('error', 'Failed to refresh repositories');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-screen">
       <Header
         title="Repositories"
         subtitle={`${repositories.length} repositories connected`}
         actions={
-          <Button>
-            <Plus size={16} className="mr-2" />
-            Add Repository
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={handleRefresh} isLoading={isRefreshing}>
+              <RefreshCcw size={16} className="mr-2" />
+              Refresh
+            </Button>
+            <Button>
+              <Plus size={16} className="mr-2" />
+              Add Repository
+            </Button>
+          </div>
         }
       />
 
@@ -112,7 +155,7 @@ export default function Repositories() {
           <Card className="p-4">
             <p className="text-xs uppercase tracking-wide text-[var(--text-tertiary)] mb-1">Queue Status</p>
             <div className="flex items-center justify-between">
-              <p className="font-medium">2 Pending Jobs</p>
+              <p className="font-medium">{queue?.queued ?? 0} Pending Jobs</p>
               <Boxes size={16} className="text-[var(--warning)]" />
             </div>
           </Card>

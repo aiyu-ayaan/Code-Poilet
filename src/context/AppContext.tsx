@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type { User, Repository, ToastProps } from '../types';
 import { mockRepositories } from '../data/mockData';
@@ -14,7 +15,7 @@ interface AppContextType {
   logout: () => Promise<void>;
   selectRepo: (repo: Repository | null) => void;
   addRepository: (repo: Repository) => void;
-  refreshRepositories: () => Promise<void>;
+  refreshRepositories: (forceSync?: boolean) => Promise<void>;
   showToast: (type: ToastProps['type'], message: string) => void;
   removeToast: (id: string) => void;
 }
@@ -32,9 +33,21 @@ interface BackendRepo {
   name: string;
   fullName: string;
   defaultBranch: string;
+  status?: 'queued' | 'running' | 'success' | 'failed' | 'idle';
+  lastRunAt?: string;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const repoCacheKey = 'acthub:repos';
+
+function mapStatus(status?: BackendRepo['status']): Repository['status'] {
+  if (status === 'queued') return 'running';
+  if (status === 'running') return 'running';
+  if (status === 'success') return 'success';
+  if (status === 'failed') return 'failed';
+  return 'idle';
+}
 
 function mapBackendRepoToUi(repo: BackendRepo): Repository {
   return {
@@ -43,14 +56,23 @@ function mapBackendRepoToUi(repo: BackendRepo): Repository {
     owner: repo.owner,
     fullName: repo.fullName,
     defaultBranch: repo.defaultBranch,
-    status: 'idle',
+    status: mapStatus(repo.status),
+    lastRunAt: repo.lastRunAt,
     workflows: [],
   };
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [repositories, setRepositories] = useState<Repository[]>(mockRepositories);
+  const [repositories, setRepositories] = useState<Repository[]>(() => {
+    try {
+      const cached = localStorage.getItem(repoCacheKey);
+      if (!cached) return mockRepositories;
+      return JSON.parse(cached) as Repository[];
+    } catch {
+      return mockRepositories;
+    }
+  });
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [toasts, setToasts] = useState<ToastProps[]>([]);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -64,11 +86,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const refreshRepositories = useCallback(async () => {
+  const refreshRepositories = useCallback(async (forceSync = true) => {
     try {
-      await apiRequest<{ count: number }>('/repos/sync', { method: 'POST' });
+      if (forceSync) {
+        await apiRequest<{ count: number }>('/repos/sync', { method: 'POST' });
+      }
       const repos = await apiRequest<BackendRepo[]>('/repos');
-      setRepositories(repos.map(mapBackendRepoToUi));
+      const mapped = repos.map(mapBackendRepoToUi);
+      setRepositories(mapped);
+      localStorage.setItem(repoCacheKey, JSON.stringify(mapped));
     } catch {
       showToast('warning', 'Using local mock repositories (backend sync unavailable).');
       setRepositories(mockRepositories);
@@ -111,7 +137,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           avatarUrl: me.avatarUrl || 'https://avatars.githubusercontent.com/u/1?v=4',
         });
 
-        await refreshRepositories();
+        await refreshRepositories(true);
       } catch {
         setUser(null);
       } finally {
