@@ -1,0 +1,26 @@
+services:
+  acthub-local:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    image: acthub-local:latest
+    container_name: acthub-local
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      REPOS_ROOT: /app/runtime/repos
+    ports:
+      - "8080:8080"
+      - "5173:5173"
+    command: npm run dev:full
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /var/run/docker.sock:/var/run/docker.sock
+      - acthub_runtime_local:/app/runtime
+    restart: unless-stopped
+
+volumes:
+  acthub_runtime_local:

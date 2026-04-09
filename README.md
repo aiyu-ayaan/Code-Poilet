@@ -1,73 +1,78 @@
-# React + TypeScript + Vite
+# ActHub (Frontend + Backend)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+ActHub is a GitHub Actions-style local CI/CD dashboard powered by `nektos/act`.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Frontend: React + Vite (`src/`)
+- Backend API: Express + MongoDB (`backend/src/`)
+- Auth: GitHub OAuth with repo-layer permissions
+- Runner: Background queue worker with concurrency limits and dedupe
 
-## React Compiler
+## Environment
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Create `.env` from `.env.example` and fill these values:
 
-## Expanding the ESLint configuration
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `GITHUB_CALLBACK_URL` (default: `http://localhost:8080/api/auth/github/callback`)
+- `JWT_SECRET` (min 32 chars)
+- `MONGODB_URI`
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### GitHub OAuth App
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- Homepage URL: `http://localhost:5173`
+- Callback URL: `http://localhost:8080/api/auth/github/callback`
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Docker Compose (Recommended)
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### 1) Local development (no Mongo inside compose)
+
+Uses `docker-compose.local.yml` and expects MongoDB to be available externally (host/service URL in `.env`).
+
+```bash
+docker compose -f docker-compose.local.yml up --build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+This starts frontend + backend with `act` support and mounts Docker socket for workflow execution.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+### 2) Full deployment (includes MongoDB)
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Uses `docker-compose.yml` and starts:
+
+- `acthub` app service
+- `mongo` database service
+
+```bash
+docker compose up --build -d
 ```
+
+## API Endpoints
+
+- `GET /api/auth/github/start`
+- `GET /api/auth/github/callback`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- `POST /api/repos/sync`
+- `GET /api/repos`
+- `GET /api/repos/:owner/:name/workflows`
+- `GET /api/repos/:owner/:name/workflows/:file/content`
+- `POST /api/runs/trigger/:owner/:name`
+- `GET /api/runs/history`
+- `GET /api/runs/:runId`
+- `GET /api/runs/status/queue`
+
+## Non-Docker local run
+
+```bash
+npm install
+npm run dev
+npm run dev:backend
+```
+
+## Reliability Features
+
+- Queue dedupe for same repo + workflow + branch
+- Background worker with `MAX_CONCURRENT_RUNS`
+- Repo permission checks before triggering pipelines
+- Real-time log streaming storage per run
