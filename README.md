@@ -8,6 +8,7 @@ ActHub is a GitHub Actions-style local CI/CD dashboard powered by `nektos/act`.
 - Backend API: Express + MongoDB (`backend/src/`)
 - Auth: GitHub OAuth with repo-layer permissions
 - Runner: Background queue worker with concurrency limits and dedupe
+- Live updates: WebSocket stream for queue and run logs/status
 
 ## Environment
 

@@ -1,21 +1,31 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Copy,
-  ChevronDown,
-  ChevronRight,
-  Check,
-  Clock,
-  Activity,
-  TerminalSquare,
-} from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { ArrowLeft, Copy, Check, Clock, Activity, TerminalSquare } from 'lucide-react';
 import Header from '../components/layout/Header';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
-import type { WorkflowRun, RunLog } from '../types';
+import { apiRequest } from '../utils/api';
+import { connectLiveSocket } from '../utils/live';
+
+type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+
+interface LiveRun {
+  runId: string;
+  workflowName?: string;
+  workflowFile: string;
+  fullRepoName: string;
+  branch: string;
+  event: 'push' | 'workflow_dispatch';
+  triggeredBy: string;
+  status: RunStatus;
+  queuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationSeconds?: number;
+  streamLog: string[];
+  failureReason?: string;
+}
 
 function formatDuration(seconds?: number): string {
   if (!seconds) return '-';
@@ -29,25 +39,7 @@ function formatTime(dateString?: string): string {
   return new Date(dateString).toLocaleTimeString();
 }
 
-function getStepStatusIcon(status: RunLog['status']) {
-  const icons = {
-    pending: <div className="w-4 h-4 rounded-full border-2 border-[var(--text-tertiary)]" />,
-    running: <div className="w-4 h-4 rounded-full border-2 border-[var(--accent-primary)] border-t-transparent animate-spin" />,
-    success: (
-      <div className="w-4 h-4 rounded-full bg-[var(--success)] flex items-center justify-center">
-        <Check size={10} className="text-white" />
-      </div>
-    ),
-    failed: (
-      <div className="w-4 h-4 rounded-full bg-[var(--error)] flex items-center justify-center">
-        <span className="text-white text-xs">!</span>
-      </div>
-    ),
-  };
-  return icons[status];
-}
-
-function getStatusBadge(status: WorkflowRun['status']) {
+function getStatusBadge(status: RunStatus) {
   const variants = {
     queued: 'warning',
     running: 'running',
@@ -70,25 +62,73 @@ function getStatusBadge(status: WorkflowRun['status']) {
 export default function RunLogs() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { repositories, showToast } = useApp();
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set(['step-0']));
+  const [run, setRun] = useState<LiveRun | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  let run: WorkflowRun | undefined;
-  let repoName = '';
-  let workflowName = '';
+  useEffect(() => {
+    if (!id) return;
+    let active = true;
 
-  for (const repo of repositories) {
-    for (const workflow of repo.workflows) {
-      const found = workflow.runs.find((r) => r.id === id);
-      if (found) {
-        run = found;
-        repoName = repo.fullName;
-        workflowName = workflow.name;
-        break;
+    const loadRun = async () => {
+      try {
+        const data = await apiRequest<LiveRun>(`/runs/${id}`);
+        if (active) {
+          setRun(data);
+        }
+      } catch {
+        if (active) {
+          setRun(null);
+        }
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
       }
-    }
-    if (run) break;
+    };
+
+    void loadRun();
+
+    const socket = connectLiveSocket((message) => {
+      if (message.type === 'connected') {
+        socket.send(JSON.stringify({ type: 'subscribe_run', runId: id }));
+      }
+
+      if (message.type === 'run_update' && message.payload) {
+        const payload = message.payload as LiveRun;
+        if (payload.runId === id) {
+          setRun(payload);
+        }
+      }
+    });
+
+    return () => {
+      active = false;
+      try {
+        socket.send(JSON.stringify({ type: 'unsubscribe_run' }));
+      } catch {
+        // ignore
+      }
+      socket.close();
+    };
+  }, [id]);
+
+  const isLive = run?.status === 'running' || run?.status === 'queued';
+
+  const logContent = useMemo(() => run?.streamLog.join('\n') || '', [run?.streamLog]);
+
+  const copyLogs = () => {
+    navigator.clipboard.writeText(logContent);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex flex-col min-h-screen p-6">
+        <div className="skeleton h-16" />
+      </div>
+    );
   }
 
   if (!run) {
@@ -108,39 +148,11 @@ export default function RunLogs() {
     );
   }
 
-  const isLive = run.status === 'running' || run.logs.some((item) => item.status === 'running');
-
-  const logContent = useMemo(
-    () =>
-      run.logs
-        .map((log) => `[${log.stepName}]\n${log.output.join('\n')}`)
-        .join('\n\n'),
-    [run.logs]
-  );
-
-  const toggleStep = (stepIndex: number) => {
-    const newExpanded = new Set(expandedSteps);
-    const key = `step-${stepIndex}`;
-    if (newExpanded.has(key)) {
-      newExpanded.delete(key);
-    } else {
-      newExpanded.add(key);
-    }
-    setExpandedSteps(newExpanded);
-  };
-
-  const copyLogs = () => {
-    navigator.clipboard.writeText(logContent);
-    setCopied(true);
-    showToast('success', 'Logs copied to clipboard');
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
     <div className="flex-1 flex flex-col min-h-screen">
       <Header
-        title={`${workflowName} #${run.runNumber}`}
-        subtitle={repoName}
+        title={`${run.workflowName || run.workflowFile} · ${run.runId.slice(0, 8)}`}
+        subtitle={run.fullRepoName}
         actions={
           <div className="flex items-center gap-3">
             {getStatusBadge(run.status)}
@@ -165,7 +177,7 @@ export default function RunLogs() {
             </div>
             <div>
               <p className="text-xs text-[var(--text-tertiary)] uppercase">Duration</p>
-              <p className="text-sm font-medium">{formatDuration(run.duration)}</p>
+              <p className="text-sm font-medium">{formatDuration(run.durationSeconds)}</p>
             </div>
             <div>
               <p className="text-xs text-[var(--text-tertiary)] uppercase">Triggered By</p>
@@ -181,59 +193,32 @@ export default function RunLogs() {
           </div>
         </Card>
 
-        {run.logs.length === 0 ? (
-          <Card className="p-8 text-center">
-            <p className="text-[var(--text-secondary)]">No logs available for this run.</p>
-          </Card>
-        ) : (
-          <div className="space-y-2">
-            {run.logs.map((log, index) => (
-              <Card key={index} className="overflow-hidden">
-                <button
-                  onClick={() => toggleStep(index)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-[var(--bg-tertiary)] transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {expandedSteps.has(`step-${index}`) ? (
-                      <ChevronDown size={18} className="text-[var(--text-secondary)]" />
-                    ) : (
-                      <ChevronRight size={18} className="text-[var(--text-secondary)]" />
-                    )}
-                    {getStepStatusIcon(log.status)}
-                    <span className="font-medium truncate">{log.stepName}</span>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-[var(--text-tertiary)] shrink-0">
-                    <span className="inline-flex items-center gap-1">
-                      <Clock size={12} />
-                      {formatTime(log.startedAt)} - {formatTime(log.completedAt)}
-                    </span>
-                  </div>
-                </button>
-
-                {expandedSteps.has(`step-${index}`) && (
-                  <div className="border-t border-[var(--border-muted)]">
-                    <div className="px-4 py-2 text-xs text-[var(--text-tertiary)] border-b border-[var(--border-muted)] bg-[var(--bg-primary)] inline-flex items-center gap-1.5 w-full">
-                      <TerminalSquare size={13} />
-                      Live log stream
-                    </div>
-                    <pre className="p-4 bg-[var(--bg-primary)] text-sm font-mono text-[var(--text-secondary)] overflow-x-auto max-h-96 overflow-y-auto">
-                      {log.output.length === 0 ? (
-                        <span className="text-[var(--text-tertiary)]">No output yet...</span>
-                      ) : (
-                        log.output.map((line, i) => (
-                          <div key={i} className="py-0.5">
-                            <span className="text-[var(--text-tertiary)] mr-2">{String(i + 1).padStart(3, '0')}</span>
-                            <span>{line}</span>
-                          </div>
-                        ))
-                      )}
-                    </pre>
-                  </div>
-                )}
-              </Card>
-            ))}
+        <Card className="overflow-hidden">
+          <div className="px-4 py-3 flex items-center justify-between border-b border-[var(--border-muted)] bg-[var(--bg-tertiary)]">
+            <div className="inline-flex items-center gap-2 font-medium">
+              <TerminalSquare size={15} />
+              act runner output
+            </div>
+            <div className="text-xs text-[var(--text-tertiary)] inline-flex items-center gap-1">
+              <Clock size={12} />
+              {formatTime(run.startedAt || run.queuedAt)} - {formatTime(run.completedAt)}
+            </div>
           </div>
-        )}
+
+          <pre className="p-4 bg-[var(--bg-primary)] text-sm font-mono text-[var(--text-secondary)] overflow-x-auto max-h-[68vh] overflow-y-auto">
+            {run.streamLog.length === 0 ? (
+              <span className="text-[var(--text-tertiary)]">No logs yet...</span>
+            ) : (
+              run.streamLog.map((line, i) => (
+                <div key={`${i}-${line.slice(0, 8)}`} className="py-0.5">
+                  <span className="text-[var(--text-tertiary)] mr-2">{String(i + 1).padStart(3, '0')}</span>
+                  <span>{line}</span>
+                </div>
+              ))
+            )}
+            {run.failureReason && <div className="text-[var(--error)] mt-2">Failure: {run.failureReason}</div>}
+          </pre>
+        </Card>
       </main>
     </div>
   );

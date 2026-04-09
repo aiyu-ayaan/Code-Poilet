@@ -5,6 +5,7 @@ import { RunModel } from '../models/run.model.js';
 import { SessionModel } from '../models/session.model.js';
 import { RepoModel } from '../models/repo.model.js';
 import { ensureRepoLocal, runAct } from './act.service.js';
+import { publishQueueUpdate, publishRunUpdate } from './live-gateway.service.js';
 
 interface QueueRunRequest {
   githubRepoId: number;
@@ -50,6 +51,8 @@ export async function queueRun(request: QueueRunRequest) {
     actorGithubUserId: request.actorGithubUserId,
   });
 
+  await publishQueueUpdate();
+  await publishRunUpdate(run.runId, 'queued');
   return { queued: true, run };
 }
 
@@ -89,6 +92,7 @@ async function executeRun(runId: string) {
       envOverrides: run.envOverrides as Record<string, string>,
       onLine: async (line) => {
         await RunModel.updateOne({ runId: run.runId }, { $push: { streamLog: line } });
+        await publishRunUpdate(run.runId, 'log');
       },
     }).then(async ({ code }) => {
       const completedAt = new Date();
@@ -103,6 +107,8 @@ async function executeRun(runId: string) {
           },
         }
       );
+      await publishRunUpdate(run.runId, 'completed');
+      await publishQueueUpdate();
     });
   } catch (error) {
     const completedAt = new Date();
@@ -124,6 +130,8 @@ async function executeRun(runId: string) {
         },
       }
     );
+    await publishRunUpdate(run.runId, 'failed');
+    await publishQueueUpdate();
   }
 }
 
@@ -136,6 +144,9 @@ async function tickQueue() {
   if (!run) {
     return;
   }
+
+  await publishRunUpdate(run.runId, 'running');
+  await publishQueueUpdate();
 
   activeRuns += 1;
 

@@ -4,6 +4,7 @@ import Header from '../components/layout/Header';
 import Card from '../components/ui/Card';
 import { useApp } from '../context/AppContext';
 import { apiRequest } from '../utils/api';
+import { connectLiveSocket } from '../utils/live';
 
 interface QueueSnapshot {
   queued: number;
@@ -21,6 +22,14 @@ export default function Dashboard() {
     apiRequest<QueueSnapshot>('/runs/status/queue')
       .then(setQueue)
       .catch(() => setQueue(null));
+
+    const socket = connectLiveSocket((message) => {
+      if (message.type === 'queue_snapshot' && message.payload) {
+        setQueue(message.payload as QueueSnapshot);
+      }
+    });
+
+    return () => socket.close();
   }, []);
 
   return (
