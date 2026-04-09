@@ -44,7 +44,7 @@ CodePilot is a local-first CI/CD dashboard inspired by GitHub Actions and powere
 ## 1) Clone + Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/aiyu-ayaan/Code-Poilet
 cd code-pilot
 npm install
 ```
